@@ -13,6 +13,7 @@
 //! vanilla_oracle census <world-dir> <min> <max>
 //! vanilla_oracle census_names <world-dir> <min> <max> [cap]
 //! vanilla_oracle census_compare <world-dir> <seed> <min> <max> [vanilla[:settings-id]] [data-root]
+//! vanilla_oracle tree_compare <world-dir> <seed> <min> <max> [data-root]
 //! vanilla_oracle column <world-dir> <seed> <x> <z> [vanilla[:settings-id] [data-root]]
 //! ```
 //!
@@ -85,13 +86,14 @@ fn main() {
 
 /// Modes whose second positional argument is the world seed. Each of them is
 /// attested against the save's stored seed before any measurement runs.
-const SEED_MODES: [&str; 7] = [
+const SEED_MODES: [&str; 8] = [
     "worksheet",
     "compare",
     "substance",
     "block_compare",
     "biome_volume",
     "census_compare",
+    "tree_compare",
     "column",
 ];
 
@@ -102,7 +104,7 @@ fn max_positionals(mode: &str) -> Option<usize> {
         "worksheet" | "census_names" => Some(5),
         "compare" | "substance" => Some(9),
         "block_compare" => Some(8),
-        "biome_volume" => Some(6),
+        "biome_volume" | "tree_compare" => Some(6),
         "census" => Some(4),
         "census_compare" | "column" => Some(7),
         _ => None,
@@ -123,7 +125,7 @@ fn run(raw_args: &[String]) -> Result<(), String> {
     }
     let Some(mode) = args.first().map(String::as_str) else {
         return Err(
-            "usage: vanilla_oracle inspect|worksheet|compare|substance|block_compare|biome_volume|census|census_compare|census_names|column <world-dir> ..."
+            "usage: vanilla_oracle inspect|worksheet|compare|substance|block_compare|biome_volume|census|census_compare|census_names|tree_compare|column <world-dir> ..."
                 .to_string(),
         );
     };
@@ -707,6 +709,82 @@ fn run(raw_args: &[String]) -> Result<(), String> {
                 return Err("no generated chunks found in the sampled range".to_string());
             }
         }
+        "tree_compare" => {
+            let seed = parse_i64(args.get(2).ok_or("missing <seed>")?)?;
+            let min = parse_i64(args.get(3).ok_or("missing <min>")?)?;
+            let max = parse_i64(args.get(4).ok_or("missing <max>")?)?;
+            if min > max {
+                return Err("min must not exceed max".to_string());
+            }
+            let expected = chunk_square(min, max)?;
+            let data_root = resolve_data_root(args.get(5));
+            let generator = VanillaGenerator::new(&data_root, seed, "minecraft:overworld")
+                .map_err(|error| error.to_string())?;
+            let loaded_tags;
+            let tags = match generator.features() {
+                Some(features) => features.tags(),
+                None => {
+                    loaded_tags = rustmc_server::vanilla::feature::BlockTags::load(&data_root)
+                        .map_err(|error| error.to_string())?;
+                    &loaded_tags
+                }
+            };
+            if tags.members("minecraft:logs").is_none()
+                || tags.members("minecraft:leaves").is_none()
+            {
+                return Err(
+                    "data root is missing minecraft:logs or minecraft:leaves block tag".to_string(),
+                );
+            }
+            let report = oracle::compare_trees(&mut store, &generator, tags, min, max, 20)?;
+            if report.chunks == 0 {
+                report_coverage(
+                    Coverage::new(
+                        report.chunks,
+                        expected,
+                        report.missing_chunks,
+                        ScoredSource::Vanilla,
+                    ),
+                    allow_partial,
+                )?;
+                return Err("no generated chunks found in the sampled range".to_string());
+            }
+            println!(
+                "region={min}..{max} save_chunks={} missing_chunks={} scored_columns={} positions={}",
+                report.chunks, report.missing_chunks, report.columns, report.positions
+            );
+            report_coverage(
+                Coverage::new(
+                    report.chunks,
+                    expected,
+                    report.missing_chunks,
+                    ScoredSource::Vanilla,
+                ),
+                allow_partial,
+            )?;
+            for class in oracle::TreeClass::all() {
+                let stats = report.class_stats(class);
+                println!(
+                    "tree_class {} save={} rustmc={} agree={} precision={:.2}% recall={:.2}%",
+                    class.name(),
+                    stats.save,
+                    stats.rustmc,
+                    stats.agree,
+                    oracle::percent(stats.agree, stats.rustmc),
+                    oracle::percent(stats.agree, stats.save),
+                );
+            }
+            println!(
+                "save_trunks total={} rustmc_log={}",
+                report.trunk_bases_total, report.trunk_bases_matched
+            );
+            for trunk in &report.trunk_bases {
+                println!(
+                    "trunk x={} y={} z={} rustmc_log={}",
+                    trunk.x, trunk.y, trunk.z, trunk.rustmc_has_log
+                );
+            }
+        }
         "column" => {
             let seed = parse_i64(args.get(2).ok_or("missing <seed>")?)?;
             let x = parse_i64(args.get(3).ok_or("missing <x>")?)?;
@@ -887,6 +965,24 @@ mod tests {
         .collect();
         let error = run(&args).unwrap_err();
         assert!(error.contains("unexpected argument \"extra\""), "{error}");
+
+        let tree_args: Vec<String> = [
+            "tree_compare",
+            "missing-world",
+            "2026",
+            "0",
+            "31",
+            "data-root",
+            "extra",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let tree_error = run(&tree_args).unwrap_err();
+        assert!(
+            tree_error.contains("unexpected argument \"extra\""),
+            "{tree_error}"
+        );
     }
 
     /// The documented usage block is what an operator actually runs, so a mode

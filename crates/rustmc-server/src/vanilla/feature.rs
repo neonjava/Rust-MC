@@ -265,6 +265,15 @@ fn build_tag_membership(
 }
 
 impl BlockTags {
+    /// Constructs block tags from pre-resolved tag-to-block-id lists.
+    pub fn from_entries(entries: HashMap<String, Vec<String>>) -> Self {
+        let membership = build_tag_membership(&entries);
+        Self {
+            entries,
+            membership,
+        }
+    }
+
     /// Loads `data/<namespace>/tags/block/**/*.json` under the data root.
     /// A missing directory yields an empty registry, which makes every tag
     /// test fail rather than assuming membership.

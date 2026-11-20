@@ -4,6 +4,7 @@
 //! RustMC's current generator and reports exact-match percentages.
 
 use rustmc_server::vanilla::aquifer::Substance;
+use rustmc_server::vanilla::feature::BlockTags;
 use rustmc_server::vanilla::generator::VanillaGenerator;
 use rustmc_server::world::Generator;
 
@@ -1661,6 +1662,321 @@ pub fn census_generated(
     Ok(census)
 }
 
+/// Tree block classification for `tree_compare`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TreeClass {
+    Log,
+    Leaves,
+    Other,
+}
+
+impl TreeClass {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Log => "log",
+            Self::Leaves => "leaves",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn all() -> [Self; 3] {
+        [Self::Log, Self::Leaves, Self::Other]
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Log => 0,
+            Self::Leaves => 1,
+            Self::Other => 2,
+        }
+    }
+}
+
+/// Classify a block state id into `log` (`#minecraft:logs`), `leaves`
+/// (`#minecraft:leaves`), or `other`.
+pub fn classify_tree_block(state: &str, tags: &BlockTags) -> TreeClass {
+    let base = base_block_name(state);
+    if tags.contains("minecraft:logs", base) {
+        TreeClass::Log
+    } else if tags.contains("minecraft:leaves", base) {
+        TreeClass::Leaves
+    } else {
+        TreeClass::Other
+    }
+}
+
+/// Per-class counts and exact-position agreement over a compared square.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TreeClassStats {
+    pub save: usize,
+    pub rustmc: usize,
+    pub agree: usize,
+}
+
+/// Lowest log block of a vertical log run standing on a non-log block in the save.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveTrunkBase {
+    pub x: i64,
+    pub y: i32,
+    pub z: i64,
+    pub rustmc_has_log: bool,
+}
+
+/// Per-position tree comparison report across an inclusive block square.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TreeCompareReport {
+    pub chunks: usize,
+    pub missing_chunks: usize,
+    pub columns: usize,
+    pub positions: usize,
+    pub classes: [TreeClassStats; 3],
+    pub trunk_bases_total: usize,
+    pub trunk_bases_matched: usize,
+    pub trunk_bases: Vec<SaveTrunkBase>,
+}
+
+impl TreeCompareReport {
+    pub fn class_stats(&self, class: TreeClass) -> TreeClassStats {
+        self.classes[class.index()]
+    }
+}
+
+fn push_trunk_base(list: &mut Vec<SaveTrunkBase>, cap: usize, item: SaveTrunkBase) {
+    if cap == 0 {
+        return;
+    }
+    let key = (item.x, item.z, item.y);
+    let pos = list.partition_point(|e| (e.x, e.z, e.y) <= key);
+    if pos < cap {
+        list.insert(pos, item);
+        if list.len() > cap {
+            list.pop();
+        }
+    }
+}
+
+/// Score one column pair `(save_col, rustmc_col)` covering `[min_y, min_y + len)`
+/// into `report`, detecting save trunk bases (lowest log of a vertical log run
+/// standing on a non-log block).
+pub fn score_tree_column(
+    x: i64,
+    z: i64,
+    min_y: i32,
+    save_col: &[TreeClass],
+    rustmc_col: &[TreeClass],
+    trunk_cap: usize,
+    report: &mut TreeCompareReport,
+) {
+    let len = save_col.len().min(rustmc_col.len());
+    report.columns += 1;
+    for offset in 0..len {
+        let save = save_col[offset];
+        let rustmc = rustmc_col[offset];
+        report.positions += 1;
+        report.classes[save.index()].save += 1;
+        report.classes[rustmc.index()].rustmc += 1;
+        if save == rustmc {
+            report.classes[save.index()].agree += 1;
+        }
+        let is_trunk_base =
+            save == TreeClass::Log && (offset == 0 || save_col[offset - 1] != TreeClass::Log);
+        if is_trunk_base {
+            let rustmc_has_log = rustmc == TreeClass::Log;
+            report.trunk_bases_total += 1;
+            if rustmc_has_log {
+                report.trunk_bases_matched += 1;
+            }
+            push_trunk_base(
+                &mut report.trunk_bases,
+                trunk_cap,
+                SaveTrunkBase {
+                    x,
+                    y: min_y + offset as i32,
+                    z,
+                    rustmc_has_log,
+                },
+            );
+        }
+    }
+}
+
+enum SectionTree {
+    Uniform(TreeClass),
+    Grid(Vec<TreeClass>),
+}
+
+fn decode_section_tree_classes(
+    section: &Tag,
+    tags: &BlockTags,
+) -> Result<(i32, SectionTree), String> {
+    const SLOTS: usize = 16 * 16 * 16;
+    let y_min = section
+        .get("Y")
+        .and_then(Tag::as_i32)
+        .ok_or("section without Y")?
+        .checked_mul(16)
+        .ok_or("section Y overflows block coordinates")?;
+    let states = section
+        .get("block_states")
+        .or_else(|| section.get("BlockStates"))
+        .ok_or("section without block_states")?;
+    let palette = states
+        .get("palette")
+        .and_then(Tag::as_list)
+        .ok_or("block_states without palette")?;
+    if palette.len() == 1 {
+        let name = state_name(&palette[0]).ok_or("unusable palette entry")?;
+        return Ok((
+            y_min,
+            SectionTree::Uniform(classify_tree_block(&name, tags)),
+        ));
+    }
+    let mut palette_classes = Vec::with_capacity(palette.len());
+    for entry in palette {
+        let name = state_name(entry).ok_or("unusable palette entry")?;
+        palette_classes.push(classify_tree_block(&name, tags));
+    }
+    let packed = states
+        .get("data")
+        .and_then(Tag::as_long_array)
+        .ok_or("multi-value palette without data array")?;
+    let computed = (palette.len() - 1).ilog2() as usize + 1;
+    let mut widths: Vec<usize> = (1..=16)
+        .filter(|&bits| {
+            let per_long = 64 / bits;
+            per_long > 0 && packed.len() == SLOTS.div_ceil(per_long)
+        })
+        .collect();
+    widths.sort_by_key(|bits| (bits != &computed, *bits));
+    if widths.is_empty() {
+        widths.push(computed);
+    }
+    for bits in widths {
+        let slots = unpack_non_spanning(packed, bits, SLOTS);
+        if slots.iter().all(|slot| (*slot as usize) < palette.len()) {
+            if palette_classes.iter().all(|&cls| cls == TreeClass::Other) {
+                return Ok((y_min, SectionTree::Uniform(TreeClass::Other)));
+            }
+            let grid = slots
+                .into_iter()
+                .map(|slot| palette_classes[slot as usize])
+                .collect();
+            return Ok((y_min, SectionTree::Grid(grid)));
+        }
+    }
+    Err(format!(
+        "no consistent palette width for {} entries",
+        palette.len()
+    ))
+}
+
+fn chunk_tree_sections(
+    root: &Tag,
+    tags: &BlockTags,
+) -> Result<Option<Vec<(i32, SectionTree)>>, String> {
+    let sections = chunk_sections(root)?;
+    if sections.is_empty() {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(sections.len());
+    for section in sections {
+        out.push(decode_section_tree_classes(section, tags)?);
+    }
+    Ok(Some(out))
+}
+
+/// Compare trees per position across the inclusive block square `[min..=max] x [min..=max]`
+/// against `generator`, using `#minecraft:logs` and `#minecraft:leaves` from `tags`.
+pub fn compare_trees(
+    store: &mut RegionStore,
+    generator: &VanillaGenerator,
+    tags: &BlockTags,
+    min: i64,
+    max: i64,
+    trunk_cap: usize,
+) -> Result<TreeCompareReport, String> {
+    if min > max {
+        return Err("min must not exceed max".to_string());
+    }
+    let (Ok(min_i32), Ok(max_i32)) = (i32::try_from(min), i32::try_from(max)) else {
+        return Err("coordinate too large".to_string());
+    };
+    let min_cx = min_i32.div_euclid(16);
+    let max_cx = max_i32.div_euclid(16);
+    let min_cz = min_i32.div_euclid(16);
+    let max_cz = max_i32.div_euclid(16);
+    let min_y = generator.min_y();
+    let height =
+        usize::try_from(generator.height()).map_err(|_| "negative generator height".to_string())?;
+    let mut report = TreeCompareReport::default();
+
+    for cz in min_cz..=max_cz {
+        for cx in min_cx..=max_cx {
+            let Some(root) = store.chunk_root(cx, cz)? else {
+                report.missing_chunks += 1;
+                continue;
+            };
+            let Some(sections) =
+                chunk_tree_sections(&root, tags).map_err(|e| format!("chunk ({cx}, {cz}): {e}"))?
+            else {
+                report.missing_chunks += 1;
+                continue;
+            };
+            report.chunks += 1;
+            let x_start = (cx * 16).max(min_i32);
+            let x_end = (cx * 16 + 15).min(max_i32);
+            let z_start = (cz * 16).max(min_i32);
+            let z_end = (cz * 16 + 15).min(max_i32);
+
+            for z in z_start..=z_end {
+                for x in x_start..=x_end {
+                    let lx = (x - cx * 16) as usize;
+                    let lz = (z - cz * 16) as usize;
+                    let mut save_col = vec![TreeClass::Other; height];
+                    for (y_min, sec) in &sections {
+                        if let SectionTree::Uniform(TreeClass::Other) = sec {
+                            continue;
+                        }
+                        for local_y in 0..16i32 {
+                            let row = y_min + local_y - min_y;
+                            if row < 0 || row as usize >= height {
+                                continue;
+                            }
+                            let cls = match sec {
+                                SectionTree::Uniform(c) => *c,
+                                SectionTree::Grid(grid) => {
+                                    grid[lx + lz * 16 + (local_y as usize) * 256]
+                                }
+                            };
+                            if cls != TreeClass::Other {
+                                save_col[row as usize] = cls;
+                            }
+                        }
+                    }
+                    let rustmc_col: Vec<TreeClass> = generator
+                        .column_ids(x, z)
+                        .into_iter()
+                        .map(|opt| {
+                            opt.as_deref()
+                                .map_or(TreeClass::Other, |s| classify_tree_block(s, tags))
+                        })
+                        .collect();
+                    score_tree_column(
+                        i64::from(x),
+                        i64::from(z),
+                        min_y,
+                        &save_col,
+                        &rustmc_col,
+                        trunk_cap,
+                        &mut report,
+                    );
+                }
+            }
+        }
+    }
+    Ok(report)
+}
+
 /// Convenience for `inspect`: read specific absolute columns.
 pub fn read_columns(
     store: &mut RegionStore,
@@ -2651,6 +2967,217 @@ mod tests {
         assert!(matches!(
             Coverage::new(2040, 2401, 361, ScoredSource::Vanilla).outcome(true),
             CoverageOutcome::PartialAccepted { .. }
+        ));
+    }
+
+    fn tree_test_tags() -> BlockTags {
+        let mut entries = std::collections::HashMap::new();
+        entries.insert(
+            "minecraft:logs".to_owned(),
+            vec![
+                "minecraft:oak_log".to_owned(),
+                "minecraft:oak_wood".to_owned(),
+                "minecraft:birch_log".to_owned(),
+                "minecraft:spruce_log".to_owned(),
+            ],
+        );
+        entries.insert(
+            "minecraft:leaves".to_owned(),
+            vec![
+                "minecraft:oak_leaves".to_owned(),
+                "minecraft:birch_leaves".to_owned(),
+                "minecraft:spruce_leaves".to_owned(),
+            ],
+        );
+        BlockTags::from_entries(entries)
+    }
+
+    #[test]
+    fn tree_class_classification_uses_log_and_leaves_tags_and_scores_pair() {
+        let tags = tree_test_tags();
+        let save_names = [
+            "minecraft:grass_block[snowy=false]",
+            "minecraft:oak_log[axis=y]",
+            "minecraft:oak_wood",
+            "minecraft:oak_leaves[distance=1,persistent=false,waterlogged=false]",
+            "minecraft:oak_leaves[distance=2,persistent=false,waterlogged=false]",
+            "minecraft:leaf_litter[facing=north,segment_amount=2]",
+        ];
+        let rustmc_names = [
+            "minecraft:grass_block[snowy=false]",
+            "minecraft:oak_log",
+            "minecraft:air",
+            "minecraft:birch_leaves[distance=1,persistent=false,waterlogged=false]",
+            "minecraft:air",
+            "minecraft:birch_leaves[distance=2,persistent=false,waterlogged=false]",
+        ];
+        let save_col: Vec<TreeClass> = save_names
+            .iter()
+            .map(|n| classify_tree_block(n, &tags))
+            .collect();
+        let rustmc_col: Vec<TreeClass> = rustmc_names
+            .iter()
+            .map(|n| classify_tree_block(n, &tags))
+            .collect();
+        assert_eq!(
+            save_col,
+            vec![
+                TreeClass::Other,
+                TreeClass::Log,
+                TreeClass::Log,
+                TreeClass::Leaves,
+                TreeClass::Leaves,
+                TreeClass::Other,
+            ]
+        );
+        assert_eq!(
+            rustmc_col,
+            vec![
+                TreeClass::Other,
+                TreeClass::Log,
+                TreeClass::Other,
+                TreeClass::Leaves,
+                TreeClass::Other,
+                TreeClass::Leaves,
+            ]
+        );
+
+        let mut report = TreeCompareReport::default();
+        score_tree_column(3, -5, 60, &save_col, &rustmc_col, 20, &mut report);
+        assert_eq!(report.columns, 1);
+        assert_eq!(report.positions, 6);
+        assert_eq!(
+            report.class_stats(TreeClass::Log),
+            TreeClassStats {
+                save: 2,
+                rustmc: 1,
+                agree: 1,
+            }
+        );
+        assert_eq!(
+            report.class_stats(TreeClass::Leaves),
+            TreeClassStats {
+                save: 2,
+                rustmc: 2,
+                agree: 1,
+            }
+        );
+        assert_eq!(
+            report.class_stats(TreeClass::Other),
+            TreeClassStats {
+                save: 2,
+                rustmc: 3,
+                agree: 1,
+            }
+        );
+        assert_eq!(
+            percent(
+                report.class_stats(TreeClass::Log).agree,
+                report.class_stats(TreeClass::Log).rustmc
+            ),
+            100.0
+        );
+        assert_eq!(
+            percent(
+                report.class_stats(TreeClass::Log).agree,
+                report.class_stats(TreeClass::Log).save
+            ),
+            50.0
+        );
+        assert_eq!(
+            percent(
+                report.class_stats(TreeClass::Leaves).agree,
+                report.class_stats(TreeClass::Leaves).rustmc
+            ),
+            50.0
+        );
+        assert_eq!(
+            percent(
+                report.class_stats(TreeClass::Leaves).agree,
+                report.class_stats(TreeClass::Leaves).save
+            ),
+            50.0
+        );
+    }
+
+    #[test]
+    fn tree_trunk_base_detection_finds_lowest_log_of_each_vertical_run() {
+        let tags = tree_test_tags();
+        // Column starting at min_y=60:
+        // y=60: log (at bottom of column -> counts as standing on non-log)
+        // y=61: dirt (other)
+        // y=62..=65: 4-high log run -> lowest is y=62
+        // y=66: leaves
+        // y=67..=68: upper log run standing on leaves -> lowest is y=67
+        let save_col = vec![
+            classify_tree_block("minecraft:oak_log", &tags),
+            classify_tree_block("minecraft:dirt", &tags),
+            classify_tree_block("minecraft:birch_log", &tags),
+            classify_tree_block("minecraft:birch_log", &tags),
+            classify_tree_block("minecraft:birch_log", &tags),
+            classify_tree_block("minecraft:birch_log", &tags),
+            classify_tree_block("minecraft:birch_leaves", &tags),
+            classify_tree_block("minecraft:spruce_log", &tags),
+            classify_tree_block("minecraft:spruce_log", &tags),
+        ];
+        // RustMC matches y=60 and y=67 with logs, misses y=62 (has leaves there).
+        let rustmc_col = vec![
+            classify_tree_block("minecraft:oak_log", &tags),
+            classify_tree_block("minecraft:dirt", &tags),
+            classify_tree_block("minecraft:birch_leaves", &tags),
+            classify_tree_block("minecraft:birch_log", &tags),
+            classify_tree_block("minecraft:birch_log", &tags),
+            classify_tree_block("minecraft:air", &tags),
+            classify_tree_block("minecraft:air", &tags),
+            classify_tree_block("minecraft:spruce_log", &tags),
+            classify_tree_block("minecraft:air", &tags),
+        ];
+        let mut report = TreeCompareReport::default();
+        score_tree_column(10, 20, 60, &save_col, &rustmc_col, 20, &mut report);
+        assert_eq!(report.trunk_bases_total, 3);
+        assert_eq!(report.trunk_bases_matched, 2);
+        assert_eq!(
+            report.trunk_bases,
+            vec![
+                SaveTrunkBase {
+                    x: 10,
+                    y: 60,
+                    z: 20,
+                    rustmc_has_log: true,
+                },
+                SaveTrunkBase {
+                    x: 10,
+                    y: 62,
+                    z: 20,
+                    rustmc_has_log: false,
+                },
+                SaveTrunkBase {
+                    x: 10,
+                    y: 67,
+                    z: 20,
+                    rustmc_has_log: true,
+                },
+            ]
+        );
+
+        // Trunk list respects cap and does not require Heightmaps in section decode.
+        let section = compound(&[
+            ("Y", Tag::Byte(5)), // y=80..=95 (above typical ground heightmaps)
+            (
+                "block_states",
+                compound(&[(
+                    "palette",
+                    Tag::List(vec![palette_entry("minecraft:oak_leaves")]),
+                )]),
+            ),
+        ]);
+        let chunk = compound(&[("sections", Tag::List(vec![section]))]);
+        let decoded = chunk_tree_sections(&chunk, &tags).unwrap().unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].0, 80);
+        assert!(matches!(
+            decoded[0].1,
+            SectionTree::Uniform(TreeClass::Leaves)
         ));
     }
 }
