@@ -75,7 +75,7 @@ const BLOCK_Z_SIGN_EXTEND_SHIFT: u32 = i64::BITS - BLOCK_XZ_BITS;
 const BLOCK_Z_HIGH_BITS: u32 = i64::BITS - BLOCK_X_SHIFT;
 
 /// Append `value` as a protocol VarInt: seven bits per byte, low bits first.
-pub(crate) fn put_varint(mut value: u32, out: &mut Vec<u8>) {
+pub fn put_varint(mut value: u32, out: &mut Vec<u8>) {
     loop {
         let mut byte = (value & 0x7f) as u8;
         value >>= 7;
@@ -445,13 +445,13 @@ pub fn read_compressed_frame(
 }
 
 /// Append a protocol string: VarInt byte length, then UTF-8 bytes.
-pub(crate) fn put_string(value: &str, out: &mut Vec<u8>) {
+pub fn put_string(value: &str, out: &mut Vec<u8>) {
     put_varint(value.len() as u32, out);
     out.extend_from_slice(value.as_bytes());
 }
 
 /// Decode a protocol VarInt; returns `Ok(None)` when more input bytes are needed.
-pub(crate) fn read_varint(input: &[u8]) -> Result<Option<(u32, usize)>, WireError> {
+pub fn read_varint(input: &[u8]) -> Result<Option<(u32, usize)>, WireError> {
     let mut value = 0u32;
     for (i, byte) in input.iter().take(MAX_VARINT_BYTES).enumerate() {
         if i == MAX_VARINT_BYTES - 1 && byte & FIFTH_BYTE_DISALLOWED_BITS != 0 {

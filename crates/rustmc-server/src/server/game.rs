@@ -15,6 +15,7 @@ mod command_run;
 mod commands;
 mod movement;
 mod players;
+mod stats;
 
 pub use players::PLAYER_ENTITY_TYPE;
 mod persist;
@@ -110,6 +111,7 @@ pub struct Game {
     items: ItemTable,
     /// Set by `/stop`; the loop then shuts the server down.
     stop_requested: bool,
+    tick_stats: stats::TickStats,
     players: HashMap<ConnectionId, Player>,
     next_entity_id: i32,
     seed: i64,
@@ -154,6 +156,7 @@ impl Game {
             ops: rules.ops,
             items: rules.items,
             stop_requested: false,
+            tick_stats: stats::TickStats::default(),
             ids,
             dynamic_ids,
             config,
@@ -177,6 +180,8 @@ impl Game {
             let now = Instant::now();
             if now >= next_tick {
                 self.tick();
+                self.tick_stats.record(now.elapsed(), TICK);
+                self.report_tick_stats();
                 next_tick += TICK;
                 if next_tick < now {
                     // Fell behind by more than a tick: skip, do not burst.

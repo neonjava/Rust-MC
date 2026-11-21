@@ -136,18 +136,20 @@ impl Game {
             .players
             .iter()
             .map(|(id, p)| {
-                (
-                    *id,
-                    Snapshot {
-                        entity_id: p.entity_id,
-                        uuid: p.profile.uuid,
-                        position: p.position,
-                        yaw: p.yaw,
-                        pitch: p.pitch,
-                        on_ground: p.on_ground,
-                        moved: p.moved,
-                    },
-                )
+                let mut snapshot = Snapshot {
+                    entity_id: p.entity_id,
+                    uuid: p.profile.uuid,
+                    position: p.position,
+                    yaw: p.yaw,
+                    pitch: p.pitch,
+                    on_ground: p.on_ground,
+                    movement: None,
+                };
+                // Built once per moved player and shared by every viewer.
+                if p.moved {
+                    snapshot.movement = Some(movement_packets(&snapshot).map(Arc::new));
+                }
+                (*id, snapshot)
             })
             .collect();
         for (viewer_id, viewer) in &mut self.players {
@@ -169,9 +171,9 @@ impl Game {
                     viewer
                         .handle
                         .send(Outgoing::Packet(remove_entity(other.entity_id)));
-                } else if visible && other.moved {
-                    for packet in movement_packets(other) {
-                        viewer.handle.send(Outgoing::Packet(packet));
+                } else if visible && let Some(movement) = &other.movement {
+                    for packet in movement {
+                        viewer.handle.send(Outgoing::Shared(Arc::clone(packet)));
                     }
                 }
             }
@@ -190,7 +192,8 @@ struct Snapshot {
     yaw: f32,
     pitch: f32,
     on_ground: bool,
-    moved: bool,
+    /// This tick's movement packets, when the player moved.
+    movement: Option<[Arc<Packet>; 2]>,
 }
 
 fn info_packet(packet: PlayerInfoUpdatePacket) -> Option<Packet> {
