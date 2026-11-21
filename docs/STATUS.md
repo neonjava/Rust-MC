@@ -55,6 +55,14 @@ effort.
   `/stop`. Not done: the command tree for client suggestions, a literal
   `server.properties` file.
 
+- **Phase 2, proof** (branch `feat/proof`). A bot load test (`load_test` in
+  `rustmc-tools`) and server-side tick timing; 50 clustered, walking bots on
+  one machine kept every tick under 8 ms with no disconnects (see
+  [BENCHMARKS.md](BENCHMARKS.md)). The Phase 1 exit criterion (bots log in,
+  move, build, run a command, disconnect; restart keeps state; two bots see
+  each other) is covered by end-to-end tests and passed against the real 26.3
+  data with a release build.
+
 ## Not done
 
 - Phase 1 C (persistence), D (play: movement checks, block break and place,

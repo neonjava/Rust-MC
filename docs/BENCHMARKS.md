@@ -259,3 +259,39 @@ and verified to decode back to the exact original packet payloads.
 
 This measures local send-time CPU compression and wire byte sizes only; it does
 not measure socket I/O, network transport, or real-client decoding latency.
+
+## Playable server under bot load (22 November 2026)
+
+Release build of commit `a06ff8f` with Rust 1.98.1 on Linux 7.0.12-201.fc44.x86_64,
+13th Gen Intel Core i7-13650HX (20 logical CPUs), 23 GiB RAM; server and bots on
+the same machine over loopback. Server configuration: offline mode, Creative,
+view distance 10, compression threshold 256, a fresh default-terrain world (seed
+2026) for each run, the real 26.3 registry files. One 60-second run per row.
+
+Client mix: `load_test` bots (`rustmc-tools`). Every bot joins at once, walks a
+circle of radius 8 around the spawn at walking speed (4.317 blocks/s, one
+position packet per tick), sends a chat message every 10 s, acknowledges chunk
+batches and answers keep-alives. All bots stay within 16 blocks of each other,
+so every bot sees every other one move every tick: the clustered,
+movement-heavy case. Bots do not build, there are no other entities, and the
+world is otherwise idle. Tick times come from the server's own `tick_stats`
+events (two 30-second intervals per run); CPU and memory from `/proc`.
+
+| Bots | Login p50 / max (ms) | First chunk batch p50 (ms) | Others' updates per bot per s | Mean tick (ms) | Worst tick (ms) | Ticks over 50 ms | Server CPU (% of one core) | Server RSS (MiB) | Disconnects |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 28.9 / 28.9 | 133.8 | 0 | 0.04 | 0.26 | 0 | 19.2 | 126.7 | 0 |
+| 10 | 27.0 / 27.3 | 131.8 | 165.8 | 0.41 | 0.84 | 0 | 21.5 | 126.8 | 0 |
+| 20 | 26.9 / 29.2 | 134.0 | 350.1 | 0.95 | 7.27 | 0 | 39.8 | 133.2 | 0 |
+| 50 | 41.7 / 56.3 | 148.4 | 977.2 | 3.03 | 7.75 | 0 | 126.0 | 152.8 | 0 |
+
+Every bot received about 868 chunks (the 441 of its view plus those entered while
+walking). No bot was teleported back by the movement checks. Before movement
+packets were shared between viewers, the same 20- and 50-bot runs measured a
+mean tick of 2.1 and 11 ms.
+
+What this does not show: capacity with players spread over the world (more
+chunks loaded and generated), with building, mobs or redstone, over real
+networks, or with real clients. One run per row is not enough for tail
+latencies; the worst-tick column is the largest of 1,200 ticks. Tick time grows
+faster than linearly with clustered players because each moved player is sent to
+every other one.
