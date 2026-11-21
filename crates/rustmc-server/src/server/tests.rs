@@ -842,3 +842,14 @@ fn operators_run_commands_others_are_refused_and_chat_reaches_everyone() {
     }
     assert!(thread.join().expect("join").is_ok());
 }
+
+#[test]
+fn a_new_world_records_its_seed_before_anyone_joins() {
+    let dir = temp_dir();
+    let server = start_in(&dir, false, None);
+    let level = crate::storage::world_files::WorldFiles::new(&dir.join("world"))
+        .load_level()
+        .expect("load");
+    assert_eq!(level.map(|l| l.seed), Some(0));
+    drop(server);
+}
