@@ -56,7 +56,8 @@ fn run(path: &Path, started: Instant) -> i32 {
         }
     };
     control_event("config_validated", LifecycleState::Configuring, started);
-    if let Some(server) = config.server {
+    if let Some(mut server) = config.server {
+        server.console = true;
         return match rustmc_server::server::run(server, shutdown, None, |_| {}) {
             Ok(()) => 0,
             Err(error) => {

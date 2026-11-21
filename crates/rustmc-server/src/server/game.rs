@@ -10,6 +10,9 @@
 //! Not done: movement validation and block play (D), chat and commands (E).
 
 mod blocks;
+mod chat;
+mod command_run;
+mod commands;
 mod movement;
 mod players;
 
@@ -24,9 +27,11 @@ use std::time::{Duration, Instant};
 
 use super::config::ServerConfig;
 use super::connection::{ConnectionHandle, ConnectionId, Event, Outgoing};
+use super::items::ItemTable;
 use super::join::GameMode;
 use super::join::{Spawn, join_packets};
 use super::log;
+use super::ops::Ops;
 use super::world::store::ChunkStore;
 use super::world::terrain::surface_y;
 use super::world::view::{View, chunk_of};
@@ -101,6 +106,10 @@ pub struct Game {
     ids: Arc<ProtocolIds>,
     dynamic_ids: DynamicRegistryIds,
     player_entity_type: Option<u32>,
+    ops: Ops,
+    items: ItemTable,
+    /// Set by `/stop`; the loop then shuts the server down.
+    stop_requested: bool,
     players: HashMap<ConnectionId, Player>,
     next_entity_id: i32,
     seed: i64,
@@ -117,12 +126,19 @@ pub struct World {
     pub level: LevelData,
 }
 
+/// Who may do what, and the item facts commands need.
+pub struct Rules {
+    pub ops: Ops,
+    pub items: ItemTable,
+}
+
 impl Game {
     pub fn new(
         config: Arc<ServerConfig>,
         manifest: Arc<RegistryManifest>,
         online: Arc<AtomicUsize>,
         world: World,
+        rules: Rules,
         ids: Arc<ProtocolIds>,
     ) -> Self {
         let World {
@@ -135,6 +151,9 @@ impl Game {
         let player_entity_type = ids.entity_type_id(players::PLAYER_ENTITY_TYPE);
         Self {
             player_entity_type,
+            ops: rules.ops,
+            items: rules.items,
+            stop_requested: false,
             ids,
             dynamic_ids,
             config,
@@ -147,7 +166,7 @@ impl Game {
             next_entity_id: 1,
             seed: level.seed,
             tick: level.world_age,
-            day_time: level.day_time % TICKS_PER_DAY,
+            day_time: level.day_time,
         }
     }
 
@@ -170,6 +189,10 @@ impl Game {
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
+            if self.stop_requested {
+                // The accept loop and connections watch the same flag.
+                shutdown.store(true, Ordering::SeqCst);
+            }
         }
         for player in self.players.values() {
             disconnect(&player.handle, reason::SHUTDOWN);
@@ -185,6 +208,7 @@ impl Game {
             Event::ChunkReady(ready) => self.store.insert(*ready),
             Event::Joined { handle, join } => self.join(handle, *join),
             Event::Packet { id, packet } => self.packet(id, packet),
+            Event::Console(line) => self.run_command(chat::Sender::Console, &line),
             Event::Left { id, reason } => {
                 if let Some(player) = self.players.remove(&id) {
                     self.online.store(self.players.len(), Ordering::Relaxed);
@@ -301,6 +325,7 @@ impl Game {
         );
         self.online.store(self.players.len(), Ordering::Relaxed);
         self.announce(id);
+        self.send_permission_level(id);
     }
 
     fn packet(&mut self, id: ConnectionId, packet: Packet) {
@@ -313,6 +338,10 @@ impl Game {
             serverbound::MOVE_PLAYER_POS
             | serverbound::MOVE_PLAYER_POS_ROT
             | serverbound::MOVE_PLAYER_ROT => Some(self.move_player(id, packet.id, body)),
+            serverbound::CHAT => Some(self.chat(id, body)),
+            serverbound::CHAT_COMMAND | serverbound::CHAT_COMMAND_SIGNED => {
+                Some(self.chat_command(id, packet.id, body))
+            }
             _ => None,
         };
         if let Some(result) = routed {
@@ -361,7 +390,9 @@ impl Game {
     fn tick(&mut self) {
         self.tick += 1;
         self.sync_journal();
-        self.day_time = (self.day_time + 1) % TICKS_PER_DAY;
+        // The day clock counts on past one day, as vanilla's does; clients
+        // and queries take it modulo a day.
+        self.day_time = self.day_time.saturating_add(1);
         let tick = self.tick;
         let mut dropped = Vec::new();
         for (id, player) in &mut self.players {

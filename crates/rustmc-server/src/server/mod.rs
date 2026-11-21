@@ -7,10 +7,13 @@
 
 pub mod config;
 pub mod connection;
+pub mod console;
 pub mod game;
+pub mod items;
 pub mod join;
 pub mod listener;
 pub mod log;
+pub mod ops;
 pub mod world;
 
 use std::fmt;
@@ -48,6 +51,8 @@ pub enum ServerError {
     Registry(String),
     /// The world directory could not be read or written.
     Storage(StorageError),
+    /// The operator list could not be read.
+    Ops(String),
     Key(crate::net::crypto::CryptoError),
     Bind(std::io::Error),
     Accept(std::io::Error),
@@ -56,6 +61,7 @@ pub enum ServerError {
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Ops(error) => write!(f, "operator list: {error}"),
             Self::Manifest(error) => write!(f, "registry manifest: {error}"),
             Self::Registry(error) => write!(f, "registry table: {error}"),
             Self::Storage(error) => write!(f, "world storage: {error}"),
@@ -118,6 +124,10 @@ pub fn run(
             game::PLAYER_ENTITY_TYPE
         )));
     }
+    let items = items::ItemTable::load(&config.item_components)
+        .map_err(|error| ServerError::Registry(error.to_string()))?;
+    let ops =
+        ops::Ops::load(&config.ops_file).map_err(|error| ServerError::Ops(error.to_string()))?;
     let key = Arc::new(ServerKey::generate().map_err(ServerError::Key)?);
     let verifier =
         verifier.unwrap_or_else(|| Arc::new(HttpSessionServer::new(&config.session_server)));
@@ -146,6 +156,7 @@ pub fn run(
     on_bound(address);
     let (events, queue) = sync_channel(config.max_players * EVENTS_PER_PLAYER);
     let results = events.clone();
+    let console_events = events.clone();
     let accept = {
         let config = Arc::clone(&config);
         let shutdown = Arc::clone(&shutdown);
@@ -154,6 +165,9 @@ pub fn run(
             .spawn(move || listener::accept_loop(listener, config, context, events, shutdown))
             .map_err(ServerError::Bind)?
     };
+    if config.console {
+        console::spawn(console_events).map_err(ServerError::Bind)?;
+    }
     let workers = ChunkWorkers::spawn(config.generation_workers, Arc::clone(&source), results)
         .map_err(ServerError::Bind)?;
     let store = ChunkStore::new(workers, tables);
@@ -167,6 +181,7 @@ pub fn run(
             journal,
             level,
         },
+        game::Rules { ops, items },
         ids,
     );
     game.recover(&replay).map_err(ServerError::Storage)?;

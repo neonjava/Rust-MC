@@ -129,7 +129,17 @@ fn start_in(
     std::fs::write(&table, registry_table()).expect("table");
     let report = dir.join("registries.json");
     std::fs::write(&report, REGISTRIES_REPORT).expect("report");
+    let items = dir.join("minecraft/components/item");
+    std::fs::create_dir_all(&items).expect("items");
+    for (item, size) in [("stone", 64), ("dirt", 64), ("diamond_sword", 1)] {
+        std::fs::write(
+            items.join(format!("{item}.json")),
+            format!(r#"{{"components":{{"minecraft:max_stack_size":{size}}}}}"#),
+        )
+        .expect("item");
+    }
     let mut config = ServerConfig::with_registries(manifest, table, report);
+    config.ops_file = dir.join("ops.json");
     config.game_mode = game_mode_for_tests();
     config.generation_workers = 2;
     config.world_dir = dir.join("world");
@@ -734,4 +744,101 @@ fn a_move_of_more_than_ten_blocks_is_undone() {
     assert_eq!(teleport, 2, "a new teleport id");
     let x = f64::from_be_bytes(back.body[n..n + 8].try_into().expect("x"));
     assert_eq!(x, spawn[0], "back to the last accepted position");
+}
+
+/// Sends a Chat Command (the command text without its slash).
+fn run_command(client: &mut Client, command: &str) {
+    let mut body = Vec::new();
+    crate::java_wire::put_string(command, &mut body);
+    client.send(play::serverbound::CHAT_COMMAND, &body);
+}
+
+/// The text of the next System Chat Message.
+fn next_message(client: &mut Client) -> String {
+    let packet = receive_until(client, play::clientbound::SYSTEM_CHAT);
+    crate::protocol::chat::SystemChatMessagePacket::decode_payload(&packet.body)
+        .expect("system chat")
+        .content()
+        .to_plain_text()
+}
+
+/// Waits for a System Chat Message with exactly `text`, skipping others
+/// (broadcasts the client also receives).
+fn expect_message(client: &mut Client, text: &str) {
+    for _ in 0..16 {
+        if next_message(client) == text {
+            return;
+        }
+    }
+    panic!("message {text:?} never arrived");
+}
+
+#[test]
+fn operators_run_commands_others_are_refused_and_chat_reaches_everyone() {
+    let dir = temp_dir();
+    let admin = offline_uuid("Admin");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join("ops.json"),
+        format!(
+            r#"[{{"uuid":"{}","name":"Admin","level":4,"bypassesPlayerLimit":false}}]"#,
+            crate::net::identity::uuid_text(&admin)
+        ),
+    )
+    .expect("ops");
+    let mut server = start_in(&dir, false, None);
+    let mut op = join_playing(server.address, "Admin");
+    receive_until(&mut op, play::clientbound::CHUNK_BATCH_FINISHED);
+    let mut guest = join_playing(server.address, "Guest");
+    receive_until(&mut guest, play::clientbound::CHUNK_BATCH_FINISHED);
+
+    run_command(&mut op, "give @s stone 70");
+    let slot = receive_until(&mut op, play::clientbound::CONTAINER_SET_SLOT);
+    assert_eq!(slot.body[0], 0, "player window");
+    assert_eq!(next_message(&mut op), "Gave 70 [minecraft:stone] to Admin");
+
+    run_command(&mut op, "time set noon");
+    receive_until(&mut guest, play::clientbound::SET_TIME);
+    assert_eq!(next_message(&mut op), "Set the time to 6000");
+
+    run_command(&mut guest, "stop");
+    assert_eq!(
+        next_message(&mut guest),
+        "You do not have permission to use /stop"
+    );
+    run_command(&mut guest, "list");
+    assert_eq!(
+        next_message(&mut guest),
+        "There are 2 of a max of 2 players online: Admin, Guest"
+    );
+
+    let mut chat = Vec::new();
+    crate::java_wire::put_string("hello there", &mut chat);
+    chat.extend(0i64.to_be_bytes()); // timestamp
+    chat.extend(0i64.to_be_bytes()); // salt
+    chat.push(0); // no signature
+    put_varint(0, &mut chat); // message count
+    chat.extend([0, 0, 0]); // acknowledged
+    chat.push(0); // checksum
+    op.send(play::serverbound::CHAT, &chat);
+    assert!(next_message(&mut guest).contains("hello there"));
+
+    run_command(&mut op, "say building now");
+    assert_eq!(next_message(&mut guest), "[Admin] building now");
+
+    run_command(&mut op, "kick Guest");
+    receive_until(&mut guest, play::clientbound::DISCONNECT);
+    expect_message(&mut op, "Kicked Guest: Kicked by an operator");
+
+    run_command(&mut op, "stop");
+    let thread = server.thread.take().expect("thread");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !thread.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "/stop stopped the server"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(thread.join().expect("join").is_ok());
 }

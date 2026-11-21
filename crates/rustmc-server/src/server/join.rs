@@ -175,13 +175,22 @@ pub const CLOCK_RATE_NORMAL: f32 = 1.0;
 
 /// Set Time with the overworld clock running at normal speed.
 pub fn time(spawn: &Spawn, manifest: &RegistryManifest) -> Result<Packet, JoinError> {
-    let mut body = (spawn.world_age as i64).to_be_bytes().to_vec();
+    set_time(spawn.world_age, spawn.day_time, manifest)
+}
+
+/// Set Time from the world's age and the overworld day clock.
+pub fn set_time(
+    world_age: u64,
+    day_time: u64,
+    manifest: &RegistryManifest,
+) -> Result<Packet, JoinError> {
+    let mut body = (world_age as i64).to_be_bytes().to_vec();
     put_varint(1, &mut body); // one clock
     put_varint(
         registry_id(manifest, "minecraft:world_clock", OVERWORLD)?,
         &mut body,
     );
-    crate::java_wire::put_varlong(spawn.day_time, &mut body);
+    crate::java_wire::put_varlong(day_time, &mut body);
     body.extend(0f32.to_be_bytes()); // fractional time
     body.extend(CLOCK_RATE_NORMAL.to_be_bytes());
     Ok(Packet {

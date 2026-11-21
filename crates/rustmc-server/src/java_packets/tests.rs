@@ -327,6 +327,12 @@ fn every_packet_id_matches_the_official_report() {
         (
             "play",
             "clientbound",
+            "minecraft:entity_event",
+            play::clientbound::ENTITY_EVENT,
+        ),
+        (
+            "play",
+            "clientbound",
             "minecraft:entity_position_sync",
             play::clientbound::ENTITY_POSITION_SYNC,
         ),

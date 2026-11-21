@@ -109,6 +109,7 @@ pub mod play {
         pub const CONTAINER_SET_DATA: u32 = 19;
         pub const CONTAINER_SET_SLOT: u32 = 20;
         pub const DISCONNECT: u32 = 32;
+        pub const ENTITY_EVENT: u32 = 34;
         pub const ENTITY_POSITION_SYNC: u32 = 35;
         pub const FORGET_LEVEL_CHUNK: u32 = 38;
         pub const GAME_EVENT: u32 = 39;

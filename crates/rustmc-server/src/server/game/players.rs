@@ -95,6 +95,18 @@ impl Game {
         }
     }
 
+    /// Tells every player a player's new game mode.
+    pub(super) fn announce_game_mode(&mut self, id: ConnectionId) {
+        if let Some(entry) = self.info_entry(id)
+            && let Some(packet) = info_packet(PlayerInfoUpdatePacket::single(
+                PlayerInfoAction::UPDATE_GAME_MODE,
+                entry,
+            ))
+        {
+            self.broadcast(packet);
+        }
+    }
+
     /// Tells the remaining players that `uuid` (entity `entity_id`) left.
     pub(super) fn depart(&mut self, uuid: [u8; 16], entity_id: i32) {
         let mut body = Vec::new();

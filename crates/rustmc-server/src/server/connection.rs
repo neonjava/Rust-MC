@@ -88,6 +88,8 @@ pub enum Event {
         id: ConnectionId,
         reason: String,
     },
+    /// A line typed at the server console.
+    Console(String),
 }
 
 /// Starts the reader and writer threads for an accepted socket. `guard` is

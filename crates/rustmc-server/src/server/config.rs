@@ -55,6 +55,12 @@ pub const AUTOSAVE_INTERVAL_SECONDS: RangeInclusive<u64> = 10..=3_600;
 pub const DEFAULT_AUTOSAVE_INTERVAL_SECONDS: u64 = 300;
 /// Default `world_dir`, relative to the working directory.
 pub const DEFAULT_WORLD_DIR: &str = "world";
+/// Default `ops_file`, vanilla's operator list, relative to the working
+/// directory.
+pub const DEFAULT_OPS_FILE: &str = "ops.json";
+/// Where the per-item component reports sit relative to the directory of
+/// `registries.json` in the official data-generator output.
+pub const ITEM_COMPONENTS_BESIDE_REPORT: &str = "minecraft/components/item";
 
 /// Allowed `generation_workers`: chunk generation threads.
 pub const GENERATION_WORKERS: RangeInclusive<usize> = 1..=64;
@@ -79,6 +85,12 @@ pub struct ServerConfig {
     pub registry_table: PathBuf,
     /// The official 26.3 `reports/registries.json` (item and entity ids).
     pub registries_report: PathBuf,
+    /// The official per-item component reports (stack sizes).
+    pub item_components: PathBuf,
+    /// The operator list, in vanilla's `ops.json` format.
+    pub ops_file: PathBuf,
+    /// Read commands from standard input; set by the binary, not the file.
+    pub console: bool,
     /// World seed for the default terrain.
     pub seed: i64,
     /// Chunk generation threads.
@@ -110,7 +122,14 @@ impl ServerConfig {
             game_mode: GameMode::Survival,
             registry_manifest,
             registry_table,
+            item_components: registries_report
+                .parent()
+                .map_or_else(PathBuf::new, |reports| {
+                    reports.join(ITEM_COMPONENTS_BESIDE_REPORT)
+                }),
             registries_report,
+            ops_file: PathBuf::from(DEFAULT_OPS_FILE),
+            console: false,
             seed: 0,
             generation_workers: default_workers(),
             world_dir: PathBuf::from(DEFAULT_WORLD_DIR),
@@ -132,7 +151,7 @@ pub fn default_workers() -> usize {
         .clamp(*GENERATION_WORKERS.start(), *GENERATION_WORKERS.end())
 }
 
-const KEYS: [&str; 20] = [
+const KEYS: [&str; 22] = [
     "bind_address",
     "port",
     "online_mode",
@@ -147,6 +166,8 @@ const KEYS: [&str; 20] = [
     "seed",
     "generation_workers",
     "world_dir",
+    "item_components",
+    "ops_file",
     "autosave_interval_seconds",
     "session_server",
     "max_packet_bytes",
@@ -226,6 +247,15 @@ pub fn parse_server(value: &toml::Value) -> Result<ServerConfig, String> {
             return Err("`server.world_dir` must not be empty".to_owned());
         }
         config.world_dir = PathBuf::from(dir);
+    }
+    if let Some(dir) = text(table, "item_components")? {
+        config.item_components = PathBuf::from(dir);
+    }
+    if let Some(file) = text(table, "ops_file")? {
+        if file.is_empty() {
+            return Err("`server.ops_file` must not be empty".to_owned());
+        }
+        config.ops_file = PathBuf::from(file);
     }
     config.autosave_interval_seconds = integer(
         table,

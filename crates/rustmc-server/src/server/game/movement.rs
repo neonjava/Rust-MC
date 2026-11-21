@@ -37,7 +37,7 @@ pub const MAX_MOVE: f64 = 10.0;
 /// Why a move ends the connection.
 pub const INVALID_MOVE: &str = "Invalid move player packet received";
 
-fn in_world([x, y, z]: [f64; 3]) -> bool {
+pub(super) fn in_world([x, y, z]: [f64; 3]) -> bool {
     [x, y, z].iter().all(|v| v.is_finite())
         && x.abs() <= MAX_HORIZONTAL
         && z.abs() <= MAX_HORIZONTAL
