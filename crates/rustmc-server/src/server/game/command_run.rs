@@ -390,7 +390,7 @@ fn mode_name(mode: GameMode) -> &'static str {
 }
 
 /// Sends Set Container Slot for every inventory slot that changed.
-fn sync_changed_slots(
+pub(super) fn sync_changed_slots(
     inventory: &PlayerInventory,
     handle: &crate::server::connection::ConnectionHandle,
     before: &[Option<ItemStack>],

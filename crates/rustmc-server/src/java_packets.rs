@@ -123,6 +123,7 @@ pub mod play {
         pub const REMOVE_ENTITIES: u32 = 78;
         pub const ROTATE_HEAD: u32 = 85;
         pub const SET_CHUNK_CACHE_CENTER: u32 = 96;
+        pub const SET_ENTITY_DATA: u32 = 101;
         pub const SET_TIME: u32 = 115;
         pub const SYSTEM_CHAT: u32 = 124;
         pub const TAKE_ITEM_ENTITY: u32 = 127;

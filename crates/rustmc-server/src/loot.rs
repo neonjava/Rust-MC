@@ -170,7 +170,7 @@ pub struct Table {
 /// A block's name and state properties.
 pub type BlockState = (String, BTreeMap<String, String>);
 /// Looks up the block at an offset from the broken one.
-pub type Neighbour = dyn Fn((i32, i32, i32)) -> Option<BlockState>;
+pub type Neighbour<'a> = dyn Fn((i32, i32, i32)) -> Option<BlockState> + 'a;
 
 /// What a drop depends on.
 pub struct Context<'a> {
@@ -181,7 +181,7 @@ pub struct Context<'a> {
     pub tool: Option<(&'a str, &'a BTreeMap<String, u8>)>,
     pub random: &'a mut RandomSource,
     /// The name and state of the block at an offset from the broken one.
-    pub neighbour: &'a Neighbour,
+    pub neighbour: &'a Neighbour<'a>,
 }
 
 impl Context<'_> {

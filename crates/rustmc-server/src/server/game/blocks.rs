@@ -164,7 +164,14 @@ impl Game {
         let current = self.store.block(action.pos.0, action.pos.1, action.pos.2);
         let allowed = within_reach(player.position, player.game_mode, action.pos)
             && current.is_some_and(|state| self.source.tables.kind(state) != Some(StateKind::Air));
+        let survival = player.game_mode == GameMode::Survival;
         self.resolve(id, action.pos, allowed.then_some(air), action.sequence);
+        if allowed
+            && survival
+            && let Some(state) = current
+        {
+            self.drop_block_loot(id, action.pos, state);
+        }
         Ok(())
     }
 

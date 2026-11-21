@@ -129,6 +129,26 @@ pub fn run(
     }
     let items = items::ItemTable::load(&config.item_components)
         .map_err(|error| ServerError::Registry(error.to_string()))?;
+    let loot = if config
+        .loot_data
+        .join("minecraft")
+        .join("loot_table")
+        .is_dir()
+    {
+        Some(
+            crate::loot::LootTables::load(&config.loot_data)
+                .map_err(|error| ServerError::Registry(error.to_string()))?,
+        )
+    } else {
+        log::event(
+            "loot_tables_missing",
+            &[
+                ("path", &config.loot_data.display()),
+                ("effect", &"blocks drop nothing"),
+            ],
+        );
+        None
+    };
     let ops =
         ops::Ops::load(&config.ops_file).map_err(|error| ServerError::Ops(error.to_string()))?;
     let key = Arc::new(ServerKey::generate().map_err(ServerError::Key)?);
@@ -184,7 +204,7 @@ pub fn run(
             journal,
             level,
         },
-        game::Rules { ops, items },
+        game::Rules { ops, items, loot },
         ids,
     );
     game.recover(&replay).map_err(ServerError::Storage)?;

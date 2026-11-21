@@ -56,14 +56,18 @@ const REGISTRIES_REPORT: &str = r#"{
     "minecraft:item": { "entries": {
         "minecraft:air": { "protocol_id": 0 },
         "minecraft:stone": { "protocol_id": 1 },
-        "minecraft:dirt": { "protocol_id": 28 }
+        "minecraft:dirt": { "protocol_id": 28 },
+        "minecraft:cobblestone": { "protocol_id": 35 }
     } },
     "minecraft:data_component_type": { "entries": {
         "minecraft:max_stack_size": { "protocol_id": 1 }
     } },
     "minecraft:potion": { "entries": { "minecraft:water": { "protocol_id": 0 } } },
     "minecraft:mob_effect": { "entries": { "minecraft:speed": { "protocol_id": 0 } } },
-    "minecraft:entity_type": { "entries": { "minecraft:player": { "protocol_id": 159 } } }
+    "minecraft:entity_type": { "entries": {
+        "minecraft:item": { "protocol_id": 72 },
+        "minecraft:player": { "protocol_id": 159 }
+    } }
 }"#;
 
 /// Players join test servers in Creative so they can place and break blocks
@@ -131,7 +135,12 @@ fn start_in(
     std::fs::write(&report, REGISTRIES_REPORT).expect("report");
     let items = dir.join("minecraft/components/item");
     std::fs::create_dir_all(&items).expect("items");
-    for (item, size) in [("stone", 64), ("dirt", 64), ("diamond_sword", 1)] {
+    for (item, size) in [
+        ("stone", 64),
+        ("dirt", 64),
+        ("cobblestone", 64),
+        ("diamond_sword", 1),
+    ] {
         std::fs::write(
             items.join(format!("{item}.json")),
             format!(r#"{{"components":{{"minecraft:max_stack_size":{size}}}}}"#),
@@ -140,6 +149,26 @@ fn start_in(
     }
     let mut config = ServerConfig::with_registries(manifest, table, report);
     config.ops_file = dir.join("ops.json");
+    // Every default-terrain block drops one cobblestone, so a test can mine
+    // whatever lies under it.
+    let loot = dir.join("data/minecraft/loot_table/blocks");
+    std::fs::create_dir_all(&loot).expect("loot");
+    for block in [
+        "stone",
+        "dirt",
+        "grass_block",
+        "sand",
+        "gravel",
+        "sandstone",
+        "snow_block",
+    ] {
+        std::fs::write(
+            loot.join(format!("{block}.json")),
+            r#"{"type":"minecraft:block","pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:cobblestone"}]}]}"#,
+        )
+        .expect("loot table");
+    }
+    config.loot_data = dir.join("data");
     config.game_mode = game_mode_for_tests();
     config.generation_workers = 2;
     config.world_dir = dir.join("world");
@@ -852,4 +881,51 @@ fn a_new_world_records_its_seed_before_anyone_joins() {
         .expect("load");
     assert_eq!(level.map(|l| l.seed), Some(0));
     drop(server);
+}
+
+#[test]
+fn blocks_mined_in_survival_drop_items_that_players_pick_up() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join("ops.json"),
+        format!(
+            r#"[{{"uuid":"{}","name":"Miner","level":4,"bypassesPlayerLimit":false}}]"#,
+            crate::net::identity::uuid_text(&offline_uuid("Miner"))
+        ),
+    )
+    .expect("ops");
+    let server = start_in(&dir, false, None);
+    let mut miner = join_playing(server.address, "Miner");
+    receive_until(&mut miner, play::clientbound::CHUNK_BATCH_FINISHED);
+    run_command(&mut miner, "gamemode survival");
+    receive_until(&mut miner, play::clientbound::GAME_EVENT);
+    // Stand beside the ground block two columns from spawn and mine it.
+    let top = crate::server::world::terrain::surface_y(crate::world::Generator::new(0), 2, 0);
+    let mut stand = Vec::new();
+    for value in [2.5f64, f64::from(top) - 1.0, 1.5] {
+        stand.extend(value.to_be_bytes());
+    }
+    stand.push(1);
+    miner.send(play::serverbound::MOVE_PLAYER_POS, &stand);
+    let mut dig = Vec::new();
+    put_varint(2, &mut dig); // finished digging
+    dig.extend(crate::java_wire::pack_block_position(2, top - 1, 0).to_be_bytes());
+    dig.push(1);
+    put_varint(3, &mut dig);
+    miner.send(play::serverbound::PLAYER_ACTION, &dig);
+    let spawned = receive_until(&mut miner, play::clientbound::ADD_ENTITY);
+    let (entity, n) = read_varint(&spawned.body).unwrap().unwrap();
+    let (entity_type, _) = read_varint(&spawned.body[n + 16..]).unwrap().unwrap();
+    assert_eq!(entity_type, 72, "an item entity");
+    let metadata = receive_until(&mut miner, play::clientbound::SET_ENTITY_DATA);
+    assert_eq!(read_varint(&metadata.body).unwrap().unwrap().0, entity);
+    // The inventory update comes first, then the pickup animation.
+    let slot = receive_until(&mut miner, play::clientbound::CONTAINER_SET_SLOT);
+    assert_eq!(slot.body[0], 0, "into the player inventory");
+    let taken = receive_until(&mut miner, play::clientbound::TAKE_ITEM_ENTITY);
+    let (collected, _) = read_varint(&taken.body).unwrap().unwrap();
+    assert_eq!(collected, entity, "the miner picked it up");
+    let removed = receive_until(&mut miner, play::clientbound::REMOVE_ENTITIES);
+    assert_eq!(read_varint(&removed.body[1..]).unwrap().unwrap().0, entity);
 }

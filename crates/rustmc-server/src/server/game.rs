@@ -13,6 +13,7 @@ mod blocks;
 mod chat;
 mod command_run;
 mod commands;
+mod drops;
 mod movement;
 mod players;
 mod stats;
@@ -40,6 +41,7 @@ use super::world::workers::ColumnSource;
 use crate::discovery_java::keepalive::KeepAliveTracker;
 use crate::java_packets::play::{clientbound, serverbound};
 use crate::java_wire::{put_nbt_text, read_f32_be, read_varint};
+use crate::loot::LootTables;
 use crate::net::crypto::random_bytes;
 use crate::net::framing::Packet;
 use crate::net::identity::{GameProfile, uuid_text};
@@ -48,6 +50,7 @@ use crate::preview_data::RegistryManifest;
 use crate::protocol::ids::{DynamicRegistryIds, ProtocolIds};
 use crate::storage::journal::Journal;
 use crate::storage::world_files::LevelData;
+use crate::vanilla::random::RandomSource;
 use crate::world::inventory::PlayerInventory;
 
 /// Length of one game tick at 20 ticks per second.
@@ -112,6 +115,10 @@ pub struct Game {
     /// Set by `/stop`; the loop then shuts the server down.
     stop_requested: bool,
     tick_stats: stats::TickStats,
+    loot: Option<LootTables>,
+    drops: HashMap<i32, drops::Dropped>,
+    item_entity_type: Option<u32>,
+    random: RandomSource,
     players: HashMap<ConnectionId, Player>,
     next_entity_id: i32,
     seed: i64,
@@ -128,10 +135,11 @@ pub struct World {
     pub level: LevelData,
 }
 
-/// Who may do what, and the item facts commands need.
+/// Who may do what, and the item and loot facts play needs.
 pub struct Rules {
     pub ops: Ops,
     pub items: ItemTable,
+    pub loot: Option<LootTables>,
 }
 
 impl Game {
@@ -157,6 +165,10 @@ impl Game {
             items: rules.items,
             stop_requested: false,
             tick_stats: stats::TickStats::default(),
+            loot: rules.loot,
+            drops: HashMap::new(),
+            item_entity_type: ids.entity_type_id(drops::ITEM_ENTITY_TYPE),
+            random: RandomSource::from_world_seed(level.seed as u64),
             ids,
             dynamic_ids,
             config,
@@ -434,6 +446,7 @@ impl Game {
             self.remove_player(id, text);
         }
         self.track_players();
+        self.tick_drops();
         if tick.is_multiple_of(self.config.autosave_interval_seconds * TICKS_PER_SECOND) {
             self.save_all();
         }

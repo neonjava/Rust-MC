@@ -61,6 +61,9 @@ pub const DEFAULT_OPS_FILE: &str = "ops.json";
 /// Where the per-item component reports sit relative to the directory of
 /// `registries.json` in the official data-generator output.
 pub const ITEM_COMPONENTS_BESIDE_REPORT: &str = "minecraft/components/item";
+/// Where the data generator's `data` output (loot tables, predicates, tags)
+/// sits relative to the directory of `registries.json`.
+pub const DATA_BESIDE_REPORTS: &str = "../data";
 
 /// Allowed `generation_workers`: chunk generation threads.
 pub const GENERATION_WORKERS: RangeInclusive<usize> = 1..=64;
@@ -87,6 +90,9 @@ pub struct ServerConfig {
     pub registries_report: PathBuf,
     /// The official per-item component reports (stack sizes).
     pub item_components: PathBuf,
+    /// The official data directory holding `minecraft/loot_table`; without
+    /// it, broken blocks drop nothing.
+    pub loot_data: PathBuf,
     /// The operator list, in vanilla's `ops.json` format.
     pub ops_file: PathBuf,
     /// Read commands from standard input; set by the binary, not the file.
@@ -127,6 +133,9 @@ impl ServerConfig {
                 .map_or_else(PathBuf::new, |reports| {
                     reports.join(ITEM_COMPONENTS_BESIDE_REPORT)
                 }),
+            loot_data: registries_report
+                .parent()
+                .map_or_else(PathBuf::new, |reports| reports.join(DATA_BESIDE_REPORTS)),
             registries_report,
             ops_file: PathBuf::from(DEFAULT_OPS_FILE),
             console: false,
@@ -151,7 +160,7 @@ pub fn default_workers() -> usize {
         .clamp(*GENERATION_WORKERS.start(), *GENERATION_WORKERS.end())
 }
 
-const KEYS: [&str; 22] = [
+const KEYS: [&str; 23] = [
     "bind_address",
     "port",
     "online_mode",
@@ -167,6 +176,7 @@ const KEYS: [&str; 22] = [
     "generation_workers",
     "world_dir",
     "item_components",
+    "loot_data",
     "ops_file",
     "autosave_interval_seconds",
     "session_server",
@@ -250,6 +260,9 @@ pub fn parse_server(value: &toml::Value) -> Result<ServerConfig, String> {
     }
     if let Some(dir) = text(table, "item_components")? {
         config.item_components = PathBuf::from(dir);
+    }
+    if let Some(dir) = text(table, "loot_data")? {
+        config.loot_data = PathBuf::from(dir);
     }
     if let Some(file) = text(table, "ops_file")? {
         if file.is_empty() {
