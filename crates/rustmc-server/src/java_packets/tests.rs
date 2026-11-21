@@ -326,6 +326,30 @@ fn every_packet_id_matches_the_official_report() {
         ),
         (
             "play",
+            "serverbound",
+            "minecraft:client_command",
+            play::serverbound::CLIENT_COMMAND,
+        ),
+        (
+            "play",
+            "clientbound",
+            "minecraft:player_combat_kill",
+            play::clientbound::PLAYER_COMBAT_KILL,
+        ),
+        (
+            "play",
+            "clientbound",
+            "minecraft:respawn",
+            play::clientbound::RESPAWN,
+        ),
+        (
+            "play",
+            "clientbound",
+            "minecraft:set_health",
+            play::clientbound::SET_HEALTH,
+        ),
+        (
+            "play",
             "clientbound",
             "minecraft:set_entity_data",
             play::clientbound::SET_ENTITY_DATA,

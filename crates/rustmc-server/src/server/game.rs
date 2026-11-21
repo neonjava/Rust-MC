@@ -14,6 +14,7 @@ mod chat;
 mod command_run;
 mod commands;
 mod drops;
+mod health;
 mod movement;
 mod players;
 mod stats;
@@ -97,6 +98,7 @@ struct Player {
     moved: bool,
     /// Entity ids of the other players spawned on this client.
     seen: HashSet<i32>,
+    health: health::Health,
 }
 
 /// The world-owning game loop.
@@ -340,11 +342,13 @@ impl Game {
                 on_ground: false,
                 moved: false,
                 seen: HashSet::new(),
+                health: health::Health::default(),
             },
         );
         self.online.store(self.players.len(), Ordering::Relaxed);
         self.announce(id);
         self.send_permission_level(id);
+        self.send_health(id);
     }
 
     fn packet(&mut self, id: ConnectionId, packet: Packet) {
@@ -358,6 +362,7 @@ impl Game {
             | serverbound::MOVE_PLAYER_POS_ROT
             | serverbound::MOVE_PLAYER_ROT => Some(self.move_player(id, packet.id, body)),
             serverbound::CHAT => Some(self.chat(id, body)),
+            serverbound::CLIENT_COMMAND => Some(self.client_command(id, body)),
             serverbound::CHAT_COMMAND | serverbound::CHAT_COMMAND_SIGNED => {
                 Some(self.chat_command(id, packet.id, body))
             }
@@ -447,6 +452,7 @@ impl Game {
         }
         self.track_players();
         self.tick_drops();
+        self.tick_health();
         if tick.is_multiple_of(self.config.autosave_interval_seconds * TICKS_PER_SECOND) {
             self.save_all();
         }

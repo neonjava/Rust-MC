@@ -77,6 +77,7 @@ pub mod play {
         pub const CHAT: u32 = 9;
         pub const CHAT_SESSION_UPDATE: u32 = 10;
         pub const CHUNK_BATCH_RECEIVED: u32 = 11;
+        pub const CLIENT_COMMAND: u32 = 12;
         pub const CLIENT_TICK_END: u32 = 13;
         pub const CLIENT_INFORMATION: u32 = 14;
         pub const CONTAINER_CLOSE: u32 = 19;
@@ -117,13 +118,16 @@ pub mod play {
         pub const LEVEL_CHUNK_WITH_LIGHT: u32 = 46;
         pub const LOGIN: u32 = 50;
         pub const PLAYER_ABILITIES: u32 = 65;
+        pub const PLAYER_COMBAT_KILL: u32 = 69;
         pub const PLAYER_INFO_REMOVE: u32 = 70;
         pub const PLAYER_INFO_UPDATE: u32 = 71;
         pub const PLAYER_POSITION: u32 = 73;
         pub const REMOVE_ENTITIES: u32 = 78;
+        pub const RESPAWN: u32 = 84;
         pub const ROTATE_HEAD: u32 = 85;
         pub const SET_CHUNK_CACHE_CENTER: u32 = 96;
         pub const SET_ENTITY_DATA: u32 = 101;
+        pub const SET_HEALTH: u32 = 106;
         pub const SET_TIME: u32 = 115;
         pub const SYSTEM_CHAT: u32 = 124;
         pub const TAKE_ITEM_ENTITY: u32 = 127;

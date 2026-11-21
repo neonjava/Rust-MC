@@ -103,6 +103,7 @@ impl Game {
                 return Err(reason::SLOW);
             }
         }
+        self.after_move(id, position[1], on_ground);
         Ok(())
     }
 }

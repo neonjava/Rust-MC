@@ -52,6 +52,11 @@ pub fn chunk_of(x: f64, z: f64) -> (i32, i32) {
 }
 
 impl View {
+    /// The view distance in chunks.
+    pub fn distance(&self) -> u8 {
+        u8::try_from(self.radius).unwrap_or(u8::MAX)
+    }
+
     pub fn new(center: (i32, i32), radius: u8) -> Self {
         let radius = i32::from(radius);
         Self {

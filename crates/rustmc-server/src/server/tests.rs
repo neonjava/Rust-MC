@@ -929,3 +929,66 @@ fn blocks_mined_in_survival_drop_items_that_players_pick_up() {
     let removed = receive_until(&mut miner, play::clientbound::REMOVE_ENTITIES);
     assert_eq!(read_varint(&removed.body[1..]).unwrap().unwrap().0, entity);
 }
+
+/// Sends a position with an on-ground flag.
+fn move_to(client: &mut Client, [x, y, z]: [f64; 3], on_ground: bool) {
+    let mut body = Vec::new();
+    for value in [x, y, z] {
+        body.extend(value.to_be_bytes());
+    }
+    body.push(u8::from(on_ground));
+    client.send(play::serverbound::MOVE_PLAYER_POS, &body);
+}
+
+#[test]
+fn a_long_fall_kills_and_the_player_respawns_with_full_health() {
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(
+        dir.join("ops.json"),
+        format!(
+            r#"[{{"uuid":"{}","name":"Faller","level":4,"bypassesPlayerLimit":false}}]"#,
+            crate::net::identity::uuid_text(&offline_uuid("Faller"))
+        ),
+    )
+    .expect("ops");
+    let server = start_in(&dir, false, None);
+    let mut client = join_playing(server.address, "Faller");
+    let spawn = spawn_position(&mut client);
+    let health = receive_until(&mut client, play::clientbound::SET_HEALTH);
+    assert_eq!(health.body[..4], 20f32.to_be_bytes(), "full health on join");
+    run_command(&mut client, "gamemode survival");
+    receive_until(&mut client, play::clientbound::GAME_EVENT);
+    // Rise 27 blocks in steps the movement checks accept, then land.
+    for step in 1..=3 {
+        move_to(
+            &mut client,
+            [spawn[0], spawn[1] + 9.0 * f64::from(step), spawn[2]],
+            false,
+        );
+    }
+    for step in (0..3).rev() {
+        move_to(
+            &mut client,
+            [spawn[0], spawn[1] + 9.0 * f64::from(step), spawn[2]],
+            step == 0,
+        );
+    }
+    let kill = receive_until(&mut client, play::clientbound::PLAYER_COMBAT_KILL);
+    assert!(!kill.body.is_empty(), "the respawn screen");
+    assert_eq!(next_message(&mut client), "Faller fell from a high place");
+    let mut respawn = Vec::new();
+    put_varint(0, &mut respawn); // perform respawn
+    client.send(play::serverbound::CLIENT_COMMAND, &respawn);
+    receive_until(&mut client, play::clientbound::RESPAWN);
+    let health = receive_until(&mut client, play::clientbound::SET_HEALTH);
+    assert_eq!(
+        health.body[..4],
+        20f32.to_be_bytes(),
+        "full health after respawn"
+    );
+    let position = receive_until(&mut client, play::clientbound::PLAYER_POSITION);
+    let (_, n) = read_varint(&position.body).unwrap().unwrap();
+    let y = f64::from_be_bytes(position.body[n + 8..n + 16].try_into().expect("y"));
+    assert_eq!(y, spawn[1], "back at the world spawn");
+}

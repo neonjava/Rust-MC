@@ -260,6 +260,7 @@ impl Game {
         player.awaiting_teleport = Some(teleport_id);
         player.position = position;
         player.moved = true;
+        player.health.reset_fall();
         player.handle.send(Outgoing::Packet(teleport(
             teleport_id,
             position,

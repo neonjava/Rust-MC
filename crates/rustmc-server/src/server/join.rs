@@ -138,23 +138,47 @@ pub fn login(spawn: &Spawn, manifest: &RegistryManifest) -> Result<Packet, JoinE
     body.push(0); // reduced debug info
     body.push(1); // enable respawn screen
     body.push(0); // do limited crafting
-    put_varint(
-        registry_id(manifest, "minecraft:dimension_type", OVERWORLD)?,
-        &mut body,
-    );
-    put_identifier(OVERWORLD, &mut body);
-    body.extend(0i64.to_be_bytes()); // hashed seed (not shared with clients)
-    put_varint(spawn.game_mode as u32, &mut body);
-    put_varint(0, &mut body); // previous game mode: undefined
-    body.push(0); // is debug
-    body.push(0); // is flat
-    body.push(0); // has death location
-    put_varint(0, &mut body); // portal cooldown
-    put_varint(SEA_LEVEL, &mut body);
+    spawn_info(spawn.game_mode, manifest, &mut body)?;
     body.push(u8::from(spawn.online_mode));
     body.push(0); // enforces secure chat: chat is not signed yet
     Ok(Packet {
         id: clientbound::LOGIN,
+        body,
+    })
+}
+
+/// The dimension and game mode block Login and Respawn share: dimension
+/// type and name, hashed seed, game mode, previous game mode, debug and flat
+/// flags, death location, portal cooldown and sea level.
+fn spawn_info(
+    game_mode: GameMode,
+    manifest: &RegistryManifest,
+    body: &mut Vec<u8>,
+) -> Result<(), JoinError> {
+    put_varint(
+        registry_id(manifest, "minecraft:dimension_type", OVERWORLD)?,
+        body,
+    );
+    put_identifier(OVERWORLD, body);
+    body.extend(0i64.to_be_bytes()); // hashed seed (not shared with clients)
+    put_varint(game_mode as u32, body);
+    put_varint(0, body); // previous game mode: undefined
+    body.push(0); // is debug
+    body.push(0); // is flat
+    body.push(0); // has death location
+    put_varint(0, body); // portal cooldown
+    put_varint(SEA_LEVEL, body);
+    Ok(())
+}
+
+/// Respawn into the overworld after death, keeping no data (vanilla's
+/// choice for respawns after death).
+pub fn respawn(game_mode: GameMode, manifest: &RegistryManifest) -> Result<Packet, JoinError> {
+    let mut body = Vec::new();
+    spawn_info(game_mode, manifest, &mut body)?;
+    body.push(0); // data kept: nothing
+    Ok(Packet {
+        id: clientbound::RESPAWN,
         body,
     })
 }

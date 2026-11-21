@@ -142,7 +142,7 @@ impl Game {
         }
     }
 
-    fn spawn_item(&mut self, stack: ItemStack, (x, y, z): (i32, i32, i32)) {
+    pub(super) fn spawn_item(&mut self, stack: ItemStack, (x, y, z): (i32, i32, i32)) {
         let entity_id = self.next_entity_id;
         self.next_entity_id = self.next_entity_id.wrapping_add(1).max(1);
         let mut uuid = [0u8; 16];

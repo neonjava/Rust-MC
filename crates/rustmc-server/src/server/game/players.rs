@@ -135,6 +135,8 @@ impl Game {
         let snapshot: Vec<(ConnectionId, Snapshot)> = self
             .players
             .iter()
+            // A dead player's entity is gone until they respawn.
+            .filter(|(_, p)| !p.health.dead)
             .map(|(id, p)| {
                 let mut snapshot = Snapshot {
                     entity_id: p.entity_id,
