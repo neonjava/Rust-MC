@@ -28,3 +28,5 @@ observations of real vanilla worlds; the methods and full numbers are in
 | Seeing other players | partial | Player Info Update/Remove, Spawn Entity, Entity Position Sync and Set Head Rotation ids checked against the packet report; end-to-end test | No entity metadata (skin layers, poses), no swing animations, latency always 0 |
 | Saved worlds | partial | Chunk NBT read from a real 26.3 save; restart end-to-end test | Only the Overworld; entities, block entities and vanilla day time are not read or written |
 | Commands | not started | Parsing only; see [COMMANDS.md](COMMANDS.md) | |
+| Commands on the playable server | partial | Syntax and permission levels from the minecraft.wiki command pages; end-to-end test | Eleven commands; no command tree, so no client suggestions; no selector arguments; `give` does not drop what does not fit; reply wording is modelled on vanilla's, not compared |
+| Chat | partial | Packet layouts from minecraft.wiki (protocol 777); end-to-end test | Relayed as unsigned system chat; no chat type formatting |

@@ -46,12 +46,20 @@ effort.
   blocks. Not done: collision with blocks (needs per-state collision shapes,
   which the official reports do not include), item drops and pickups (with
   survival, Phase 3).
+- **Phase 1 E, server features** (branch `feat/commands`). Chat relayed to
+  everyone; commands from players and the console with vanilla permission
+  levels and a vanilla-format `ops.json` (see [COMMANDS.md](COMMANDS.md));
+  the `[server]` configuration documented in [SERVER.md](SERVER.md); structured
+  `event=` logging of joins, leaves, saves, chat and commands. An end-to-end
+  test covers an operator and a guest running commands, chat, a kick and
+  `/stop`. Not done: the command tree for client suggestions, a literal
+  `server.properties` file.
 
 ## Not done
 
 - Phase 1 C (persistence), D (play: movement checks, block break and place,
   other players, inventory) and E (chat, commands with permissions, server
-  config, logging). C and D are in review (above); E remains.
+  config, logging). C, D and E are in review (above).
 - Phases 2 to 8.
 - There is no playable world on `main` yet: the server answers status pings
   and runs the opt-in preview, which is read-only and single-player; this
